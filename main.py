@@ -81,11 +81,11 @@ async def webhook(request: Request, x_telegram_bot_api_secret_token: str | None 
         )
         return Response("ok", 200)
 
-    # первое сообщение
+    # первое сообщение (без квадратных скобок)
     intro = random.choice(PHRASES)
     await bot.send_message(
         msg.chat_id,
-        f"Информация передана. [{intro}]",
+        f"Информация передана. {intro}",
         reply_to_message_id=msg.message_id,
         parse_mode=ParseMode.HTML
     )
@@ -98,4 +98,5 @@ async def webhook(request: Request, x_telegram_bot_api_secret_token: str | None 
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=8000)
+
 
