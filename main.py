@@ -1,16 +1,32 @@
-import os, re, random
+import os, re, random, asyncio
 from fastapi import FastAPI, Request, Response, Header
 from telegram import Bot, Update
 from telegram.constants import ParseMode
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
-WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "")  # можно не задавать
+WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "")
 if not BOT_TOKEN:
     raise RuntimeError("Set BOT_TOKEN env")
 
 bot = Bot(BOT_TOKEN)
 app = FastAPI()
 MENTION = re.compile(r"@[\w_]+")
+
+# список фраз для "пролога"
+PHRASES = [
+    "Запускаю алгоритм случайного выбора… шестерёнки крутятся.",
+    "Шепчу имена в шляпу судьбы — сейчас вытяну...",
+    "Перемешиваю данные в подпрограмме рандомизации…",
+    "Вглядываюсь в хрустальный шар… вижу имя, всплывающее из тумана...",
+    "Формирую список участников, запускаю генератор случайных чисел...",
+    "Заглядываю в бездну случайности — кто там вспыхнет первым?",
+    "Заряд энергии пошёл в контур, искры складываются в результат...",
+    "Открываю скрытый регистр случайностей…",
+    "Свеча мерцает, а тени шепчут имя победителя...",
+    "Подбрасываю кинжал судьбы — куда укажет, того и выберет...",
+    "Ветер перемешал имена, осталось выхватить одно из потока...",
+    "Инопланетный алгоритм выбора активирован. Контакта ждите через секунду."
+]
 
 def extract_participants(msg):
     text = (msg.text or "").strip()
@@ -27,6 +43,20 @@ def extract_participants(msg):
 @app.get("/health")
 async def health():
     return {"ok": True}
+
+@app.get("/")
+async def root():
+    return {"ok": True}
+
+async def send_with_delay(chat_id, reply_to_id, ppl):
+    await asyncio.sleep(10)  # задержка 10 сек
+    winner = random.choice(ppl)
+    await bot.send_message(
+        chat_id,
+        f"🎲 наш прекрасный и очень случайный победитель: {winner}",
+        reply_to_message_id=reply_to_id,
+        parse_mode=ParseMode.HTML
+    )
 
 @app.post("/webhook")
 async def webhook(request: Request, x_telegram_bot_api_secret_token: str | None = Header(None)):
@@ -51,15 +81,21 @@ async def webhook(request: Request, x_telegram_bot_api_secret_token: str | None 
         )
         return Response("ok", 200)
 
-    winner = random.choice(ppl)
+    # первое сообщение
+    intro = random.choice(PHRASES)
     await bot.send_message(
         msg.chat_id,
-        f"🎲 Случайный выбор: <b>{winner}</b>\nУчастники: {', '.join(ppl)}",
+        f"Информация передана. [{intro}]",
         reply_to_message_id=msg.message_id,
         parse_mode=ParseMode.HTML
     )
+
+    # второе сообщение с задержкой
+    asyncio.create_task(send_with_delay(msg.chat_id, msg.message_id, ppl))
+
     return Response("ok", 200)
 
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=8000)
+
