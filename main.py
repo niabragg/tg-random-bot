@@ -2,6 +2,7 @@ import os, re, random, asyncio
 from fastapi import FastAPI, Request, Response, Header
 from telegram import Bot, Update
 from telegram.constants import ParseMode
+from telegram.error import BadRequest
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "")
@@ -12,7 +13,6 @@ bot = Bot(BOT_TOKEN)
 app = FastAPI()
 MENTION = re.compile(r"@[\w_]+")
 
-# список фраз для "пролога"
 PHRASES = [
     "Запускаю алгоритм случайного выбора… шестерёнки крутятся.",
     "Шепчу имена в шляпу судьбы — сейчас вытяну...",
@@ -42,20 +42,39 @@ PHRASES = [
     "Чайник закипел, пар нарисовал имя на стекле...",
     "Стул заскрипел так, будто шепнул имя победителя...",
     "Лифт остановился между этажами и высветил буквы на табло..."
-
 ]
 
 def extract_participants(msg):
     text = (msg.text or "").strip()
     out = set(MENTION.findall(text))
+
     for ent in (msg.entities or []):
         if ent.type == "mention":
             out.add(text[ent.offset: ent.offset + ent.length])
         elif ent.type == "text_mention" and ent.user and ent.user.username:
             out.add(f"@{ent.user.username}")
+
     if msg.reply_to_message and msg.reply_to_message.text:
         out.update(MENTION.findall(msg.reply_to_message.text))
+
     return list(out)
+
+async def safe_send_message(chat_id, text, reply_to_message_id=None):
+    try:
+        return await bot.send_message(
+            chat_id=chat_id,
+            text=text,
+            reply_to_message_id=reply_to_message_id,
+            parse_mode=ParseMode.HTML
+        )
+    except BadRequest as e:
+        if "Message to be replied not found" in str(e):
+            return await bot.send_message(
+                chat_id=chat_id,
+                text=text,
+                parse_mode=ParseMode.HTML
+            )
+        raise
 
 @app.get("/health")
 async def health():
@@ -66,13 +85,12 @@ async def root():
     return {"ok": True}
 
 async def send_with_delay(chat_id, reply_to_id, ppl):
-    await asyncio.sleep(10)  # задержка 10 сек
+    await asyncio.sleep(10)
     winner = random.choice(ppl)
-    await bot.send_message(
+    await safe_send_message(
         chat_id,
         f"🎲 наш прекрасный и очень случайный победитель: {winner}",
-        reply_to_message_id=reply_to_id,
-        parse_mode=ParseMode.HTML
+        reply_to_message_id=reply_to_id
     )
 
 @app.post("/webhook")
@@ -80,40 +98,43 @@ async def webhook(request: Request, x_telegram_bot_api_secret_token: str | None 
     if WEBHOOK_SECRET and x_telegram_bot_api_secret_token != WEBHOOK_SECRET:
         return Response("forbidden", 200)
 
-    data = await request.json()
-    upd = Update.de_json(data, bot)
-    msg = getattr(upd, "message", None)
-    if not msg or not msg.text:
-        return Response("ok", 200)
-    if not msg.text.lower().startswith("/random"):
-        return Response("ok", 200)
+    try:
+        data = await request.json()
+        upd = Update.de_json(data, bot)
+        msg = getattr(upd, "message", None)
 
-    ppl = extract_participants(msg)
-    if not ppl:
-        await bot.send_message(
+        if not msg or not msg.text:
+            return Response("ok", 200)
+
+        if not msg.text.lower().startswith("/random"):
+            return Response("ok", 200)
+
+        ppl = extract_participants(msg)
+
+        if not ppl:
+            await safe_send_message(
+                msg.chat_id,
+                "❌ Укажи участников: <code>/random @user1 @user2 …</code>",
+                reply_to_message_id=msg.message_id
+            )
+            return Response("ok", 200)
+
+        intro = random.choice(PHRASES)
+        await safe_send_message(
             msg.chat_id,
-            "❌ Укажи участников: <code>/random @user1 @user2 …</code>",
-            reply_to_message_id=msg.message_id,
-            parse_mode=ParseMode.HTML
+            f"Информация передана. {intro}",
+            reply_to_message_id=msg.message_id
         )
+
+        asyncio.create_task(send_with_delay(msg.chat_id, msg.message_id, ppl))
+
         return Response("ok", 200)
 
-    # первое сообщение (без квадратных скобок)
-    intro = random.choice(PHRASES)
-    await bot.send_message(
-        msg.chat_id,
-        f"Информация передана. {intro}",
-        reply_to_message_id=msg.message_id,
-        parse_mode=ParseMode.HTML
-    )
-
-    # второе сообщение с задержкой
-    asyncio.create_task(send_with_delay(msg.chat_id, msg.message_id, ppl))
-
-    return Response("ok", 200)
+    except Exception as e:
+        print(f"WEBHOOK ERROR: {repr(e)}")
+        return Response("ok", 200)
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000)
-
-
+    port = int(os.getenv("PORT", 8000))
+    uvicorn.run("main:app", host="0.0.0.0", port=port)
